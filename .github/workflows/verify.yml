@@ -1,0 +1,49 @@
+name: Verify portfolio
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: portfolio
+          POSTGRES_PASSWORD: ci-local-only
+          POSTGRES_DB: trace_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_USERNAME: portfolio
+      DB_PASSWORD: ci-local-only
+      DB_DATABASE: trace_ci
+      JWT_SECRET: ci-only-not-a-production-secret-123456789
+      NODE_ENV: test
+      PORT: 3019
+      HOST: 127.0.0.1
+      HEDERA_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts && npm run build && npm test -- --runInBand && npm audit --audit-level=high
+        working-directory: backend
+      - run: npm run migration:run
+        working-directory: backend
+      - run: npm run create:users
+        working-directory: backend
+        env:
+          NODE_ENV: development
+      - run: |
+          node dist/src/main.js > /tmp/trace-api.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3019/health && break || sleep 1; done
+          node scripts/verify-demo.mjs
+        working-directory: backend
+      - run: npm ci --ignore-scripts && npm run build && npm audit --audit-level=high
+        working-directory: frontend
